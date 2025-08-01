@@ -50,6 +50,14 @@ def find_jira_key_in_thread(channel, thread_ts, logger):
     """Busca o histórico de uma thread para encontrar a chave do card do Jira."""
     try:
         result = app.client.conversations_replies(channel=channel, ts=thread_ts)
+        messages = result.get("messages", [])
+        while result.get("has_more", False):
+            cursor = result.get("response_metadata", {}).get("next_cursor")
+            if not cursor:
+                break
+            next_result = app.client.conversations_replies(channel=channel, ts=thread_ts, cursor=cursor)
+            messages.extend(next_result.get("messages", []))
+            result = next_result
         for message in result.get("messages", []):
             # Procura pela mensagem específica postada pelo bot
             match = re.search(r"Card criado no Jira:.*?\|([A-Z]+-\d+)>", message.get("text", ""))
@@ -93,8 +101,9 @@ def handle_message_events(body, logger):
             'summary': f"[{channel_name}] {message_text[:50]}...",
             'description': description,
             'issuetype': {'name': 'Task'},
-            'parent': {'key': os.environ.get("JIRA_PARENT_KEY", "SCRUM-4")},
         }
+        if "JIRA_PARENT_KEY" in os.environ:
+            issue_dict['parent'] = {'key': os.environ["JIRA_PARENT_KEY"]}
         new_issue = jira.create_issue(fields=issue_dict)
 
         app.client.chat_postMessage(
