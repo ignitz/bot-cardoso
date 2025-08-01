@@ -19,6 +19,7 @@ COMMAND_TO_STATUS = {
 
 REQUIRED_ENV_VARS = [
     "INCLUDE_CHANNELS",
+    "INCLUDE_USERS",
     "SLACK_BOT_TOKEN",
     "SLACK_APP_TOKEN",
     "JIRA_SERVER",
@@ -31,6 +32,7 @@ for var in REQUIRED_ENV_VARS:
     if var not in os.environ:
         raise EnvironmentError(f"Missing required environment variable: {var}")
 INCLUDE_CHANNELS = os.environ["INCLUDE_CHANNELS"].split(",")
+INCLUDE_USERS = os.environ["INCLUDE_USERS"].split(",")
 
 SLACK_BOT_TOKEN = os.environ["SLACK_BOT_TOKEN"]
 SLACK_APP_TOKEN = os.environ["SLACK_APP_TOKEN"]
@@ -129,8 +131,16 @@ def handle_message_events(body, logger):
 @app.event("app_mention")
 def handle_app_mention_events(body, say, logger):
     event = body.get("event", {})
+    user_id = event.get("user")
+    user_info = app.client.users_info(user=user_id).get("user", {})
+    user_email = user_info.get("profile", {}).get("email")
+
     thread_ts = event.get("thread_ts")
     if not thread_ts:
+        return
+    
+    if user_email not in INCLUDE_USERS:
+        say(text="Você não está autorizado a usar este comando.", thread_ts=event.get("thread_ts"))
         return
 
     jira_key = find_jira_key_in_thread(event["channel"], thread_ts, logger)
@@ -148,9 +158,6 @@ def handle_app_mention_events(body, say, logger):
 
     try:
         if command == "start":
-            user_id = event.get("user")
-            user_info = app.client.users_info(user=user_id).get("user", {})
-            user_email = user_info.get("profile", {}).get("email")
             if user_email:
                 jira_users = jira.search_users(query=user_email)
                 if len(jira_users) == 1:

@@ -44,6 +44,7 @@ Serve mais para atendimento de suporte, onde cada mensagem em um canal monitorad
     JIRA_PROJECT_KEY="PROJ"
     JIRA_PARENT_KEY="PROJ-123" # Opcional: Chave de uma tarefa pai para criar sub-tarefas
     INCLUDE_CHANNELS="canal-1,canal-2" # Nomes dos canais para monitorar, separados por vírgula
+    INCLUDE_USERS="user-1@email.com,user-2@email.com" # E-mails dos usuários para interagir, separados por vírgula
     ```
 
 5.  **Execute o bot:**
