@@ -32,16 +32,24 @@ for var in REQUIRED_ENV_VARS:
         raise EnvironmentError(f"Missing required environment variable: {var}")
 INCLUDE_CHANNELS = os.environ["INCLUDE_CHANNELS"].split(",")
 
+SLACK_BOT_TOKEN = os.environ["SLACK_BOT_TOKEN"]
+SLACK_APP_TOKEN = os.environ["SLACK_APP_TOKEN"]
+JIRA_SERVER = os.environ["JIRA_SERVER"]
+JIRA_USERNAME = os.environ["JIRA_USERNAME"]
+JIRA_API_TOKEN = os.environ["JIRA_API_TOKEN"]
+JIRA_PROJECT_KEY = os.environ["JIRA_PROJECT_KEY"]
+JIRA_PARENT_KEY = os.environ.get("JIRA_PARENT_KEY", None)
+
 # --- Fim da Configuração --- #
 
 # Inicialização de Clientes
-app = App(token=os.environ.get("SLACK_BOT_TOKEN"))
-jira_options = {'server': os.environ.get("JIRA_SERVER")}
+app = App(token=SLACK_BOT_TOKEN)
+jira_options = {'server': JIRA_SERVER}
 jira = JIRA(
     options=jira_options,
     basic_auth=(
-        os.environ.get("JIRA_USERNAME"),
-        os.environ.get("JIRA_API_TOKEN"),
+        JIRA_USERNAME,
+        JIRA_API_TOKEN,
     ),
 )
 
@@ -97,13 +105,13 @@ def handle_message_events(body, logger):
         )
 
         issue_dict = {
-            'project': {'key': os.environ.get("JIRA_PROJECT_KEY")},
+            'project': {'key': JIRA_PROJECT_KEY},
             'summary': f"[{channel_name}] {message_text[:50]}...",
             'description': description,
             'issuetype': {'name': 'Task'},
         }
-        if "JIRA_PARENT_KEY" in os.environ:
-            issue_dict['parent'] = {'key': os.environ["JIRA_PARENT_KEY"]}
+        if JIRA_PARENT_KEY is not None:
+            issue_dict['parent'] = {'key': JIRA_PARENT_KEY}
         new_issue = jira.create_issue(fields=issue_dict)
 
         app.client.chat_postMessage(
@@ -177,7 +185,9 @@ def handle_app_mention_events(body, say, logger):
 if __name__ == "__main__":
     while True:
         try:
-            handler = SocketModeHandler(app, os.environ["SLACK_APP_TOKEN"])
+            handler = SocketModeHandler(app, SLACK_APP_TOKEN)
+            if JIRA_PARENT_KEY is None:
+                logging.warning("JIRA_PARENT_KEY não definido, os cards serão criados diretamente no projeto.")
             handler.start()
         except Exception as e:
             logging.error(f"Erro inesperado, reiniciando em 10 segundos: {e}")
