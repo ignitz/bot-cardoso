@@ -211,6 +211,10 @@ def handle_app_mention_events(body, say, logger):
         logger.error(f"Erro ao processar comando para o card {jira_key}: {e}")
         say(f"Ocorreu um erro ao processar o comando para o card {jira_key}.", thread_ts=thread_ts)
 
+@app.event("message")
+def handle_message_events(event, logger):
+    logger.debug(f"Received message event: {event}")
+
 if __name__ == "__main__":
     while True:
         try:
