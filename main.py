@@ -106,9 +106,10 @@ def handle_message_events(body, logger):
             f"Mensagem: {message_text}"
         )
 
+        clean_message_text = re.sub(r'[^a-zA-Z0-9 ]', '', message_text)
         issue_dict = {
             'project': {'key': JIRA_PROJECT_KEY},
-            'summary': f"[{channel_name}] {message_text[:50]}...",
+            'summary': f"[{channel_name}] {clean_message_text[:50]}...",
             'description': description,
             'issuetype': {'name': 'Task'},
         }
