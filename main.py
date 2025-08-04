@@ -15,6 +15,7 @@ COMMAND_TO_STATUS = {
     "start": "In Progress",
     "done": "Done",
     "cancel": "Cancel",
+    "restart": "Restart",
 }
 
 REQUIRED_ENV_VARS = [
@@ -79,20 +80,8 @@ def find_jira_key_in_thread(channel, thread_ts, logger):
         logger.error(f"Erro ao buscar histórico da thread {thread_ts}: {e}")
     return None
 
-@app.message(".*")
-def handle_message_events(body, logger):
-    event = body.get("event", {})
-    if event.get("user") is None or event.get("bot_id") is not None or event.get("thread_ts") is not None:
-        return
-
+def create_jira_card(event, channel_name, logger):
     try:
-        channel_id = event.get("channel")
-        channel_info = app.client.conversations_info(channel=channel_id).get("channel", {})
-        channel_name = channel_info.get("name", "N/A")
-
-        if channel_name not in INCLUDE_CHANNELS:
-            return
-
         user_id = event.get("user")
         user_info = app.client.users_info(user=user_id).get("user", {})
         user_name = user_info.get("real_name", "N/A")
@@ -125,9 +114,29 @@ def handle_message_events(body, logger):
                 "\nPor favor, aguarde o antendimento do seu card."
             )
         )
-
     except Exception as e:
         logger.error(f"Erro ao criar card: {e}")
+
+
+@app.message(".*")
+def handle_message_events(body, logger):
+    event = body.get("event", {})
+    if event.get("user") is None or event.get("bot_id") is not None or event.get("thread_ts") is not None:
+        return
+
+    try:
+        channel_id = event.get("channel")
+        channel_info = app.client.conversations_info(channel=channel_id).get("channel", {})
+        channel_name = channel_info.get("name", "N/A")
+
+        if channel_name not in INCLUDE_CHANNELS:
+            return
+
+        create_jira_card(event, channel_name, logger)
+
+    except Exception as e:
+        logger.error(f"Erro ao processar mensagem: {e}")
+
 
 @app.event("app_mention")
 def handle_app_mention_events(body, say, logger):
@@ -144,12 +153,24 @@ def handle_app_mention_events(body, say, logger):
         say(text="Você não está autorizado a usar este comando.", thread_ts=event.get("thread_ts"))
         return
 
+    command = event.get("text", "").split('>', 1)[-1].strip().lower()
+
+    if command == "restart":
+        try:
+            channel_id = event.get("channel")
+            channel_info = app.client.conversations_info(channel=channel_id).get("channel", {})
+            channel_name = channel_info.get("name", "N/A")
+            create_jira_card(event, channel_name, logger)
+        except Exception as e:
+            logger.error(f"Erro ao processar comando: {e}")
+            say(f"Ocorreu um erro ao processar o comando.", thread_ts=thread_ts)
+        return
+
     jira_key = find_jira_key_in_thread(event["channel"], thread_ts, logger)
     if not jira_key:
         say(text="Não encontrei um card do Jira associado a esta thread.", thread_ts=thread_ts)
         return
 
-    command = event.get("text", "").split('>', 1)[-1].strip().lower()
     target_status = COMMAND_TO_STATUS.get(command)
 
     if not target_status:
