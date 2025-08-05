@@ -5,6 +5,7 @@ import time
 from dotenv import load_dotenv
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
+from flask import Flask, make_response
 from jira import JIRA
 
 # --- Configuração --- #
@@ -14,8 +15,8 @@ load_dotenv()
 COMMAND_TO_STATUS = {
     "start": "In Progress",
     "done": "Done",
-    "cancel": "Cancel",
-    "restart": "Restart",
+    "cancel": "Canceled",
+    "restart": "To Do",
 }
 
 REQUIRED_ENV_VARS = [
@@ -47,7 +48,10 @@ JIRA_PARENT_KEY = os.environ.get("JIRA_PARENT_KEY", None)
 
 # Inicialização de Clientes
 app = App(token=SLACK_BOT_TOKEN)
-jira_options = {'server': JIRA_SERVER}
+socket_mode_handler = SocketModeHandler(app, SLACK_APP_TOKEN)
+flask_app = Flask(__name__)
+
+jira_options = {"server": JIRA_SERVER}
 jira = JIRA(
     options=jira_options,
     basic_auth=(
@@ -55,6 +59,17 @@ jira = JIRA(
         JIRA_API_TOKEN,
     ),
 )
+
+
+@flask_app.route("/health", methods=["GET"])
+def slack_events():
+    """Health check endpoint for use in Kubernetes as liveness probe."""
+    if (
+        socket_mode_handler.client is not None
+        and socket_mode_handler.client.is_connected()
+    ):
+        return make_response("OK", 200)
+    return make_response("The Socket Mode client is inactive", 503)
 
 
 def find_jira_key_in_thread(channel, thread_ts, logger):
@@ -66,10 +81,12 @@ def find_jira_key_in_thread(channel, thread_ts, logger):
             cursor = result.get("response_metadata", {}).get("next_cursor")
             if not cursor:
                 break
-            next_result = app.client.conversations_replies(channel=channel, ts=thread_ts, cursor=cursor)
+            next_result = app.client.conversations_replies(
+                channel=channel, ts=thread_ts, cursor=cursor
+            )
             messages.extend(next_result.get("messages", []))
             result = next_result
-        for message in result.get("messages", []):
+        for message in messages:
             # Procura pela mensagem específica postada pelo bot
             match = re.search(r"Card criado no Jira:.*?\|([A-Z]+-\d+)>", message.get("text", ""))
             if match:
@@ -80,6 +97,7 @@ def find_jira_key_in_thread(channel, thread_ts, logger):
         logger.error(f"Erro ao buscar histórico da thread {thread_ts}: {e}")
     return None
 
+
 def create_jira_card(event, channel_name, logger):
     try:
         user_id = event.get("user")
@@ -87,7 +105,9 @@ def create_jira_card(event, channel_name, logger):
         user_name = user_info.get("real_name", "N/A")
         user_email = user_info.get("profile", {}).get("email", "N/A")
 
-        permalink = app.client.chat_getPermalink(channel=event["channel"], message_ts=event["ts"])["permalink"]
+        permalink = app.client.chat_getPermalink(
+            channel=event["channel"], message_ts=event["ts"]
+        )["permalink"]
         message_text = event.get("text", "")
         description = (
             f"Solicitação de: {user_name} ({user_email})\n"
@@ -95,15 +115,17 @@ def create_jira_card(event, channel_name, logger):
             f"Mensagem: {message_text}"
         )
 
-        clean_message_text = re.sub(r'[^a-zA-Z0-9 ]', '', message_text)
+        # Remove special characters from the message text for the summary
+        # Example: \n, \t, etc.
+        clean_message_text = re.sub(r"[^a-zA-Z0-9 ]", "", message_text)
         issue_dict = {
-            'project': {'key': JIRA_PROJECT_KEY},
-            'summary': f"[{channel_name}] {clean_message_text[:50]}...",
-            'description': description,
-            'issuetype': {'name': 'Task'},
+            "project": {"key": JIRA_PROJECT_KEY},
+            "summary": f"[{channel_name}] {clean_message_text[:50]}...",
+            "description": description,
+            "issuetype": {"name": "Task"},
         }
         if JIRA_PARENT_KEY is not None:
-            issue_dict['parent'] = {'key': JIRA_PARENT_KEY}
+            issue_dict["parent"] = {"key": JIRA_PARENT_KEY}
         new_issue = jira.create_issue(fields=issue_dict)
 
         app.client.chat_postMessage(
@@ -112,8 +134,9 @@ def create_jira_card(event, channel_name, logger):
             text=(
                 f"Card criado no Jira: <{new_issue.permalink()}|{new_issue.key}>"
                 "\nPor favor, aguarde o antendimento do seu card."
-            )
+            ),
         )
+
     except Exception as e:
         logger.error(f"Erro ao criar card: {e}")
 
@@ -121,12 +144,18 @@ def create_jira_card(event, channel_name, logger):
 @app.message(".*")
 def handle_message_events(body, logger):
     event = body.get("event", {})
-    if event.get("user") is None or event.get("bot_id") is not None or event.get("thread_ts") is not None:
+    if (
+        event.get("user") is None
+        or event.get("bot_id") is not None
+        or event.get("thread_ts") is not None
+    ):
         return
 
     try:
         channel_id = event.get("channel")
-        channel_info = app.client.conversations_info(channel=channel_id).get("channel", {})
+        channel_info = app.client.conversations_info(channel=channel_id).get(
+            "channel", {}
+        )
         channel_name = channel_info.get("name", "N/A")
 
         if channel_name not in INCLUDE_CHANNELS:
@@ -148,27 +177,38 @@ def handle_app_mention_events(body, say, logger):
     thread_ts = event.get("thread_ts")
     if not thread_ts:
         return
-    
+
     if user_email not in INCLUDE_USERS:
-        say(text="Você não está autorizado a usar este comando.", thread_ts=event.get("thread_ts"))
+        say(
+            text="Você não está autorizado a usar este comando.",
+            thread_ts=event.get("thread_ts"),
+        )
         return
 
-    command = event.get("text", "").split('>', 1)[-1].strip().lower()
+    command = event.get("text", "").split(">", 1)[-1].strip().lower()
 
     if command == "restart":
         try:
             channel_id = event.get("channel")
-            channel_info = app.client.conversations_info(channel=channel_id).get("channel", {})
+            channel_info = app.client.conversations_info(channel=channel_id).get(
+                "channel", {}
+            )
             channel_name = channel_info.get("name", "N/A")
             create_jira_card(event, channel_name, logger)
         except Exception as e:
             logger.error(f"Erro ao processar comando: {e}")
-            say(f"Ocorreu um erro ao processar o comando.", thread_ts=thread_ts)
+            say(
+                text="Ocorreu um erro ao processar comando restart.",
+                thread_ts=event.get("thread_ts"),
+            )
         return
 
     jira_key = find_jira_key_in_thread(event["channel"], thread_ts, logger)
     if not jira_key:
-        say(text="Não encontrei um card do Jira associado a esta thread.", thread_ts=thread_ts)
+        say(
+            text="Não encontrei um card do Jira associado a esta thread.",
+            thread_ts=thread_ts,
+        )
         return
 
     target_status = COMMAND_TO_STATUS.get(command)
@@ -186,14 +226,22 @@ def handle_app_mention_events(body, say, logger):
                     jira.assign_issue(jira_key, user_email)
                     say(f"Card atribuído a {user_email}.", thread_ts=thread_ts)
                 else:
-                    say(f"Não foi possível encontrar um usuário único no Jira com o e-mail {user_email}.", thread_ts=thread_ts)
+                    say(
+                        f"Não foi possível encontrar um usuário único no Jira com o e-mail {user_email}.",
+                        thread_ts=thread_ts,
+                    )
 
         transitions = jira.transitions(jira_key)
-        target_transition = next((t for t in transitions if t['name'].lower() == target_status.lower()), None)
+        target_transition = next(
+            (t for t in transitions if t["name"].lower() == target_status.lower()), None
+        )
 
         if target_transition:
-            jira.transition_issue(jira_key, target_transition['id'])
-            say(f"Status do card <{jira.issue(jira_key).permalink()}|{jira_key}> alterado para '{target_status}'.", thread_ts=thread_ts)
+            jira.transition_issue(jira_key, target_transition["id"])
+            say(
+                f"Status do card <{jira.issue(jira_key).permalink()}|{jira_key}> alterado para '{target_status}'.",
+                thread_ts=thread_ts,
+            )
             if command == "done":
                 try:
                     app.client.reactions_add(
@@ -204,24 +252,36 @@ def handle_app_mention_events(body, say, logger):
                 except Exception as e:
                     logger.error(f"Error adding reaction: {e}")
         else:
-            valid_statuses = [t['name'] for t in transitions]
-            say(f"Não é possível mover para '{target_status}'. Status disponíveis: {", ".join(valid_statuses)}", thread_ts=thread_ts)
+            valid_statuses = [t["name"] for t in transitions]
+            say(
+                f"Não é possível mover para '{target_status}'. Status disponíveis: {", ".join(valid_statuses)}",
+                thread_ts=thread_ts,
+            )
 
     except Exception as e:
         logger.error(f"Erro ao processar comando para o card {jira_key}: {e}")
-        say(f"Ocorreu um erro ao processar o comando para o card {jira_key}.", thread_ts=thread_ts)
+        say(
+            f"Ocorreu um erro ao processar o comando para o card {jira_key}.",
+            thread_ts=thread_ts,
+        )
+
 
 @app.event("message")
-def handle_message_events(event, logger):
-    logger.debug(f"Received message event: {event}")
+def handle_message_events(body, logger):
+    logger.debug(body)
+
 
 if __name__ == "__main__":
-    while True:
-        try:
-            handler = SocketModeHandler(app, SLACK_APP_TOKEN)
-            if JIRA_PARENT_KEY is None:
-                logging.warning("JIRA_PARENT_KEY não definido, os cards serão criados diretamente no projeto.")
-            handler.start()
-        except Exception as e:
-            logging.error(f"Erro inesperado, reiniciando em 10 segundos: {e}")
-            time.sleep(10)
+
+    class NoHealth(logging.Filter):
+        def filter(self, record):
+            return "GET /health" not in record.getMessage()
+
+    if JIRA_PARENT_KEY is None:
+        logging.warning(
+            "JIRA_PARENT_KEY não definido, os cards serão criados diretamente no projeto."
+        )
+    socket_mode_handler.connect()
+    # Remover log do healthcheck
+    logging.getLogger("werkzeug").addFilter(NoHealth())
+    flask_app.run(host="0.0.0.0", port=8080)

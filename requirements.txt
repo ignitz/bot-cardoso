@@ -1,3 +1,4 @@
 python-dotenv==1.1.1
 slack_bolt==1.23.0
 jira==3.10.5
+Flask==3.1.1
