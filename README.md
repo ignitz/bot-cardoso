@@ -13,6 +13,7 @@ Serve mais para atendimento de suporte, onde cada mensagem em um canal monitorad
 - Atribui o card no Jira ao usuário que iniciou o trabalho (`@bot start`).
 - Adiciona uma reação de :white_check_mark: na mensagem original quando o card é concluído.
 - Anexa as mensagens da thread ao card no Jira no formato JSON.
+- [Opcional] Resume a conversa na thread e adiciona o resumo como um comentário no card do Jira usando OpenWebUI.
 
 ## Como Rodar
 
@@ -46,6 +47,8 @@ Serve mais para atendimento de suporte, onde cada mensagem em um canal monitorad
     JIRA_PARENT_KEY="PROJ-123" # Opcional: Chave de uma tarefa pai para criar sub-tarefas
     INCLUDE_CHANNELS="canal-1,canal-2" # Nomes dos canais para monitorar, separados por vírgula
     INCLUDE_USERS="user-1@email.com,user-2@email.com" # E-mails dos usuários para interagir, separados por vírgula
+    OPENWEBUI_API_URL="https://seu-openwebui-url.com"
+    OPENWEBUI_API_KEY="seu-token-de-api-do-openwebui"
     ```
 
 5.  **Execute o bot:**

@@ -3,6 +3,7 @@ import re
 import logging
 import time
 import json
+import requests
 from dotenv import load_dotenv
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
@@ -44,6 +45,9 @@ JIRA_USERNAME = os.environ["JIRA_USERNAME"]
 JIRA_API_TOKEN = os.environ["JIRA_API_TOKEN"]
 JIRA_PROJECT_KEY = os.environ["JIRA_PROJECT_KEY"]
 JIRA_PARENT_KEY = os.environ.get("JIRA_PARENT_KEY", None)
+OPENWEBUI_API_MODEL = os.environ.get("OPENWEBUI_API_MODEL", None)
+OPENWEBUI_API_URL = os.environ.get("OPENWEBUI_API_URL", None)
+OPENWEBUI_API_KEY = os.environ.get("OPENWEBUI_API_KEY", None)
 
 # --- Fim da Configuração --- #
 
@@ -72,6 +76,47 @@ def slack_events():
         return make_response("OK", 200)
     return make_response("The Socket Mode client is inactive", 503)
 
+
+def summarize_chat_history(channel, thread_ts, logger):
+    """Summarize the chat history using the OpenWebUI completions API."""
+    result = app.client.conversations_replies(channel=channel, ts=thread_ts)
+    messages = result.get("messages", [])
+    while result.get("has_more", False):
+        cursor = result.get("response_metadata", {}).get("next_cursor")
+        if not cursor:
+            break
+        next_result = app.client.conversations_replies(
+            channel=channel, ts=thread_ts, cursor=cursor
+        )
+        messages.extend(next_result.get("messages", []))
+        result = next_result
+
+    chat_history = "\n".join([message["text"] for message in messages])
+
+    headers = {
+        "Authorization": f"Bearer {OPENWEBUI_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    data = {
+        "model": OPENWEBUI_API_MODEL,
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    "Summarize the following conversation, providing a solution if one was reached."
+                    f"The summary should be in Portuguese and should be a maximum of 2 paragraphs.\n\n{chat_history}"
+                )
+            }
+        ],
+    }
+    response = requests.post(
+        f"{OPENWEBUI_API_URL}/api/chat/completions", headers=headers, json=data
+    )
+    response.raise_for_status()
+    response_data = response.json()
+    summary = response_data["choices"][0]["message"]["content"].strip()
+    logger.info(f"Chat history summarized successfully for thread {thread_ts}")
+    return summary
 
 def find_jira_key_in_thread(channel, thread_ts, logger):
     """Busca o histórico de uma thread para encontrar a chave do card do Jira."""
@@ -277,6 +322,30 @@ def handle_app_mention_events(body, say, logger):
                     save_conversation_to_jira(
                         event["channel"], thread_ts, jira_key, logger
                     )
+                    if (
+                        OPENWEBUI_API_MODEL is not None
+                        and
+                        OPENWEBUI_API_URL is not None
+                        and
+                        OPENWEBUI_API_KEY is not None
+                    ):
+                        summary = summarize_chat_history(
+                            event["channel"], thread_ts, logger
+                        )
+                        if summary:
+                            jira.add_comment(jira_key, summary)
+                            say(text=summary, thread_ts=thread_ts)
+                    
+                    reactions = app.client.reactions_get(
+                        channel=event["channel"],
+                        timestamp=thread_ts,
+                    ).get("message", {}).get("reactions", [])
+                    for reaction in reactions:
+                        app.client.reactions_remove(
+                            channel=event["channel"],
+                            name=reaction["name"],
+                            timestamp=thread_ts,
+                        )
                     app.client.reactions_add(
                         channel=event["channel"],
                         name="white_check_mark",
@@ -284,6 +353,39 @@ def handle_app_mention_events(body, say, logger):
                     )
                 except Exception as e:
                     logger.error(f"Error adding reaction: {e}")
+            elif command == "cancel":
+                reactions = app.client.reactions_get(
+                    channel=event["channel"],
+                    timestamp=thread_ts,
+                ).get("message", {}).get("reactions", [])
+                for reaction in reactions:
+                    app.client.reactions_remove(
+                        channel=event["channel"],
+                        name=reaction["name"],
+                        timestamp=thread_ts,
+                    )
+                app.client.reactions_add(
+                    channel=event["channel"],
+                    name="x",
+                    timestamp=thread_ts,
+                )
+            elif command == "restart" or command == "start":
+                reactions = app.client.reactions_get(
+                    channel=event["channel"],
+                    timestamp=thread_ts,
+                ).get("message", {}).get("reactions", [])
+                for reaction in reactions:
+                    app.client.reactions_remove(
+                        channel=event["channel"],
+                        name=reaction["name"],
+                        timestamp=thread_ts,
+                    )
+                app.client.reactions_add(
+                    channel=event["channel"],
+                    name="eyes",
+                    timestamp=thread_ts,
+                )
+
         else:
             valid_statuses = [t["name"] for t in transitions]
             say(
