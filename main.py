@@ -2,6 +2,7 @@ import os
 import re
 import logging
 import time
+import json
 from dotenv import load_dotenv
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
@@ -96,6 +97,35 @@ def find_jira_key_in_thread(channel, thread_ts, logger):
     except Exception as e:
         logger.error(f"Erro ao buscar histórico da thread {thread_ts}: {e}")
     return None
+
+
+def save_conversation_to_jira(channel, thread_ts, jira_key, logger):
+    """Busca a conversa de uma thread, salva em JSON e anexa ao card do Jira."""
+    try:
+        result = app.client.conversations_replies(channel=channel, ts=thread_ts)
+        messages = result.get("messages", [])
+        while result.get("has_more", False):
+            cursor = result.get("response_metadata", {}).get("next_cursor")
+            if not cursor:
+                break
+            next_result = app.client.conversations_replies(
+                channel=channel, ts=thread_ts, cursor=cursor
+            )
+            messages.extend(next_result.get("messages", []))
+            result = next_result
+        file_path = f"/tmp/slack-conversation-{thread_ts}.json"
+        with open(file_path, "w") as f:
+            json.dump(messages, f, indent=4)
+        jira.add_attachment(issue=jira_key, attachment=file_path)
+        logger.info(
+            f"Conversa da thread {thread_ts} salva e anexada ao card {jira_key}"
+        )
+        os.remove(file_path)
+
+    except Exception as e:
+        logger.error(
+            f"Erro ao salvar conversa da thread {thread_ts} no card {jira_key}: {e}"
+        )
 
 
 def create_jira_card(event, channel_name, logger):
@@ -244,6 +274,9 @@ def handle_app_mention_events(body, say, logger):
             )
             if command == "done":
                 try:
+                    save_conversation_to_jira(
+                        event["channel"], thread_ts, jira_key, logger
+                    )
                     app.client.reactions_add(
                         channel=event["channel"],
                         name="white_check_mark",

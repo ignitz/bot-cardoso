@@ -12,6 +12,7 @@ Serve mais para atendimento de suporte, onde cada mensagem em um canal monitorad
 - Permite atualizar o status do card do Jira mencionando o bot na thread com comandos específicos.
 - Atribui o card no Jira ao usuário que iniciou o trabalho (`@bot start`).
 - Adiciona uma reação de :white_check_mark: na mensagem original quando o card é concluído.
+- Anexa as mensagens da thread ao card no Jira no formato JSON.
 
 ## Como Rodar
 
